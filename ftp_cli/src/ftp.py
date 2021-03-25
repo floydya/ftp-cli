@@ -1,4 +1,4 @@
-import ftplib, os, typer, datetime, zipfile, shutil
+import ftplib, os, typer, datetime, zipfile, shutil, errno, stat
 from ftp_cli.src.config.controllers import ConfigController
 from ftp_cli.src.utils import APP_NAME
 
@@ -9,6 +9,14 @@ def zipdir(path, ziph):
     for root, dirs, files in os.walk(path):
         for file in files:
             ziph.write(os.path.join(root, file), os.path.relpath(os.path.join(root, file), os.path.join(path, '..')))
+
+
+def errorRemoveReadonly(func, path, exc):
+    excvalue = exc[1]
+    if func not in (os.rmdir, os.remove) or excvalue.errno != errno.EACCES:
+        raise exc
+    os.chmod(path, stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO)
+    func(path)
 
 
 def get_files_directories(ftp_obj):
@@ -63,10 +71,17 @@ def create(alias: str = typer.Argument(...)):
         else:
             backup_block = filtered_blocks[0]
             os.chdir(app_dir)
-            os.mkdir('backups')
+            try:
+                os.mkdir('backups')
+            except:
+                pass
             os.chdir('backups')
-            backup_path = f"{backup_block.alias}_{datetime.datetime.now().strftime('%Y-%M-%dT%H:%m')}"
-            os.mkdir(backup_path)
+            now = datetime.datetime.now()
+            backup_path = f"{backup_block.alias}/{now.strftime('%Y-%m-%d')}/{now.strftime('%H_%M')}"
+            try:
+                os.makedirs(backup_path, exist_ok=True)
+            except:
+                pass
             os.chdir(backup_path)
             local_dir = os.getcwd()
             ftp_obj = ftplib.FTP(host=backup_block.hostname, user=backup_block.login, passwd=backup_block.password)
@@ -77,7 +92,7 @@ def create(alias: str = typer.Argument(...)):
             zipf = zipfile.ZipFile(f"{local_dir}.zip", 'w', zipfile.ZIP_DEFLATED)
             zipdir(local_dir, zipf)
             zipf.close()
-            shutil.rmtree(local_dir)
+            shutil.rmtree(local_dir, ignore_errors=False, onerror=errorRemoveReadonly)
             typer.secho("Backup compressed. Done", fg=typer.colors.GREEN)
     else:
         typer.echo("Nothing to backup...")
